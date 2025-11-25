@@ -8,10 +8,8 @@
 	- print(f"x is {x}")
 		- Output ==> x is 5
 - ### Literals
-	- A
-	- ![[Pasted image 20251125201100.png]]
-	- B
-	- ![](../Pasted%20image%2020251125201210.png)
+	- ![](attachments/Pasted%20image%2020251125203223.png)
+	- 
 	- Integers - 20/-20
 	- Float - 0.1
 	- Strings - "Abhishk"
@@ -31,19 +29,20 @@
 			- `5%2`= 1
 		- Plus & Minus
 		- floor division = //
-	- ![[Screenshot 2025-11-21 at 8.07.30 AM.png]]
+	- ![](attachments/Pasted%20image%2020251125203239.png)
 - ### Variables
 	- name = "Abhishek"
 - ### Comments
 	- `# comment goes here`
 - ### Input
-	- ![[Screenshot 2025-11-21 at 8.28.51 AM.png]]
-	- ![[Screenshot 2025-11-21 at 8.30.16 AM.png]]
+	- ![](attachments/Pasted%20image%2020251125203250.png)
+	- ![](attachments/Pasted%20image%2020251125203259.png)
 - ### String
 	- `print("ha"*10)` ==> `hahahahahahahahahaha`
-	- ![[Screenshot 2025-11-21 at 5.37.13 PM.png]]
+	- ![](attachments/Pasted%20image%2020251125203310.png)
 - ### Comparison Operators:
-	- ![[Screenshot 2025-11-21 at 5.41.38 PM.png]]
+	- ![](attachments/Pasted%20image%2020251125203323.png)
+
 
 ---
 ## Conditional Statements
@@ -74,15 +73,15 @@ else:
 for i in range(0,10):
 	print(i)
 ```
-![[Screenshot 2025-11-21 at 6.42.05 PM.png]]
+
+- ![](attachments/Pasted%20image%2020251125203335.png)
 
 ---
 # Logic & Bitwise operator
 - and
 - or
 - not
-	- ![[Screenshot 2025-11-21 at 7.06.00 PM.png]]
-
+	- ![](attachments/Pasted%20image%2020251125203344.png)
 ---
 # Lists
 - `list = ["US", "UK", "IN"]`
@@ -91,8 +90,9 @@ for i in range(0,10):
 - `del countries[1]` ==> `["CN", "IN"]`
 - `print(list[-1])` ==> IN 
 ### List Methods
-- ![[Screenshot 2025-11-21 at 8.28.24 PM.png]]![[Screenshot 2025-11-21 at 8.30.26 PM.png]]
-- ![[Screenshot 2025-11-21 at 8.31.41 PM.png]]
+- ![](attachments/Pasted%20image%2020251125203352.png)
+- ![](attachments/Pasted%20image%2020251125203359.png)
+- ![](attachments/Pasted%20image%2020251125203405.png)
 - `list.sort()`
 - `list.reverse()`
 ---
@@ -223,7 +223,8 @@ Except e:
 	print("Exception occured" + e)
 ```
 
-Type of Exceptions: ![[Screenshot 2025-11-24 at 7.23.55 PM.png]]
+Type of Exceptions: ![](attachments/Pasted%20image%2020251125203417.png)
+
 
 Raise Exception - `raise ZeroVisionError`
 
