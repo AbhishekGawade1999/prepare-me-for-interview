@@ -259,7 +259,11 @@ jobs:
           NODE
 
           # run the electron script under xvfb (Electron needs an X server on ubuntu runners)
-          xvfb-run --auto-servernum --server-args='-screen 0 1280x1024x24' node electron-print.js
+          # install electron (if not already installed)
+          npm install electron@latest --no-audit --no-fund
+          
+          # run the script with the electron binary under Xvfb
+          xvfb-run --auto-servernum --server-args='-screen 0 1280x1024x24' npx electron electron-print.js
 
       - name: No changed markdown files
         if: ${{ steps.changed.outputs.files == '' }}
