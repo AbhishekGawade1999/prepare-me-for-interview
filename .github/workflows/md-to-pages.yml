@@ -8,7 +8,7 @@ on:
       - '**/*.md'
       - '_config.yml'
       - 'index.md'
-      - '.github/workflows/deploy-pages.yml'
+      - '.github/workflows/md-to-pages.yml'
   workflow_dispatch:
 
 permissions:
