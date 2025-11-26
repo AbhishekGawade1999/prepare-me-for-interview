@@ -19,6 +19,11 @@ Each guide covers core concepts, common interview questions, and practical, hand
 
 ---
 
+## Github Pages/Static Website
+- <https://abhishekgawade1999.github.io/prepare-me-for-interview/>
+
+---
+
 ## Bonus
 
 This is managed using Obsidian, an open source note taking app. You can download it from - https://obsidian.md/
