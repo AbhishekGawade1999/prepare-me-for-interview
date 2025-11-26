@@ -497,8 +497,5 @@
 	- *Answer*: Create reusable modules for common functions (logging, API calls, validation), import them into main scripts, version control everything, write tests for each module
 ---
 # Courses
-## Free
-- https://www.youtube.com/watch?v=rfscVS0vtbw
-## Paid
-- https://learn.kodekloud.com/courses/python-basics
-- 
+- **Free**: https://www.youtube.com/watch?v=rfscVS0vtbw-
+- **Paid**: https://learn.kodekloud.com/courses/python-basics
