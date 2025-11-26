@@ -1,0 +1,64 @@
+# Jekyll Configuration for GitHub Pages
+
+# Theme - uses GitHub's official theme for exact GitHub markdown rendering
+theme: jekyll-theme-cayman
+# Alternative themes you can try:
+# theme: jekyll-theme-minimal
+# theme: jekyll-theme-slate
+
+# Site settings
+title: Interview Preparation Notes
+description: Technical interview preparation materials
+author: Your Name
+
+# Build settings
+markdown: kramdown
+kramdown:
+  input: GFM  # GitHub Flavored Markdown
+  syntax_highlighter: rouge
+  syntax_highlighter_opts:
+    default_lang: python
+    css_class: 'highlight'
+
+# Exclude files from Jekyll build
+exclude:
+  - README.md
+  - LICENSE
+  - .git
+  - .github
+  - node_modules
+  - vendor
+
+# Include attachments folder
+include:
+  - DevOps/attachments
+
+# Plugins
+plugins:
+  - jekyll-relative-links
+  - jekyll-optional-front-matter
+  - jekyll-readme-index
+  - jekyll-titles-from-headings
+
+# Plugin settings
+relative_links:
+  enabled: true
+  collections: false
+
+optional_front_matter:
+  remove_originals: false
+
+titles_from_headings:
+  enabled: true
+  strip_title: false
+  collections: false
+
+# Collections
+collections_dir: .
+
+# Defaults
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default
