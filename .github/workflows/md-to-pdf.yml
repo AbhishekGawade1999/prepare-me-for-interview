@@ -6,8 +6,6 @@ on:
       - main
     paths:
       - '**/*.md'
-    paths-ignore:
-      - '**/README.md'
 
 permissions:
   contents: write
@@ -21,7 +19,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Git user
+      - name: Configure git user
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -31,59 +29,71 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y pandoc texlive-xetex texlive-fonts-recommended texlive-latex-recommended
 
-      - name: Find changed markdown files
+      - name: Determine changed markdown files (exclude README.md)
         id: changed
         run: |
-          # Determine changed files between the pushed commit and the previous commit
-          BEFORE=${{ github.event.before }}
-          AFTER=${{ github.sha }}
-          # If this is the first commit in the repo, fallback to listing all md files
-          if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
-            git ls-files '*.md' > changed_md.txt || true
-          else
-            git diff --name-only "$BEFORE" "$AFTER" -- '*.md' > changed_md.txt || true
-          fi
-          # Exclude README.md anywhere in the repo
-          grep -v -E '(^|/)(README|readme)\.md$' changed_md.txt > changed_md_filtered.txt || true
-          echo "::set-output name=files::$(cat changed_md_filtered.txt | tr '\n' '|' )"
+          set -euo pipefail
+          BEFORE="${{ github.event.before }}"
+          AFTER="${{ github.sha }}"
 
-      - name: Convert changed markdown to PDF and stage differences
-        if: steps.changed.outputs.files != ''
+          # If this is the initial commit, list all md files
+          if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            git ls-files '*.md' > all_md.txt || true
+          else
+            git diff --name-only "$BEFORE" "$AFTER" -- '*.md' > all_md.txt || true
+          fi
+
+          # Filter out README.md (case-insensitive) anywhere in the repo
+          grep -v -Ei '(^|/)(readme)\.md$' all_md.txt > changed_md_filtered.txt || true
+
+          # Prepare a pipe-separated list for output (empty if none)
+          FILES=$(awk '{printf "%s|", $0}' changed_md_filtered.txt || true)
+          # Trim trailing pipe
+          FILES=${FILES%|}
+
+          echo "files=$FILES" >> $GITHUB_OUTPUT
+
+      - name: Convert changed markdown to PDF and commit if different
+        if: ${{ steps.changed.outputs.files != '' }}
         run: |
           set -euo pipefail
           IFS='|' read -r -a FILES <<< "${{ steps.changed.outputs.files }}"
           CHANGED=false
-          for f in "${FILES[@]}"; do
-            if [ -z "$f" ]; then
-              continue
-            fi
-            # Ensure directory exists for output
-            out="${f%.md}.pdf"
-            outdir=$(dirname "$out")
-            mkdir -p "$outdir"
 
-            # Convert using pandoc with xelatex for better font handling
-            pandoc "$f" -o "$out" --pdf-engine=xelatex || {
-              echo "pandoc failed for $f"
+          for md in "${FILES[@]}"; do
+            [ -z "$md" ] && continue
+
+            pdf="${md%.md}.pdf"
+            mkdir -p "$(dirname "$pdf")"
+
+            # Convert using pandoc (adjust options for Obsidian specifics if needed)
+            pandoc "$md" -o "$pdf" --pdf-engine=xelatex || {
+              echo "pandoc failed for $md"
               exit 1
             }
 
-            # If PDF does not exist in git or differs, stage it
-            if ! git ls-files --error-unmatch "$out" >/dev/null 2>&1; then
-              echo "New PDF created: $out"
-              git add "$out"
+            # If PDF not tracked yet, add it
+            if ! git ls-files --error-unmatch "$pdf" >/dev/null 2>&1; then
+              git add "$pdf"
               CHANGED=true
+              echo "Staged new PDF: $pdf"
             else
-              # Compare binary files; if different, stage
-              if ! git diff --no-index --quiet "$out" "$out"; then
-                # The above is a no-op comparison placeholder; use cmp to compare working file with HEAD version
-                git show HEAD:"$out" >/tmp/old.pdf || true
-                if ! cmp -s /tmp/old.pdf "$out"; then
-                  echo "PDF changed: $out"
-                  git add "$out"
+              # Extract the version from HEAD to a temp file (if exists) and compare
+              TMP_OLD="/tmp/old_pdf_$(basename "$pdf")"
+              if git show HEAD:"$pdf" > "$TMP_OLD" 2>/dev/null; then
+                if ! cmp -s "$TMP_OLD" "$pdf"; then
+                  git add "$pdf"
                   CHANGED=true
+                  echo "Staged updated PDF: $pdf"
+                else
+                  echo "No change in PDF: $pdf"
                 fi
-                rm -f /tmp/old.pdf
+                rm -f "$TMP_OLD"
+              else
+                # HEAD doesn't have the file (shouldn't happen because ls-files said tracked), but handle anyway
+                git add "$pdf"
+                CHANGED=true
+                echo "Staged PDF (no HEAD copy): $pdf"
               fi
             fi
           done
@@ -96,5 +106,5 @@ jobs:
           fi
 
       - name: No changed markdown files
-        if: steps.changed.outputs.files == ''
-        run: echo "No changed markdown files to process"
+        if: ${{ steps.changed.outputs.files == '' }}
+        run: echo "No changed markdown files to process (or only README.md changed)"
