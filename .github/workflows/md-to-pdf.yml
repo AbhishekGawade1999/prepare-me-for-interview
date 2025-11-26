@@ -1,4 +1,4 @@
-name: Convert changed Markdown to PDF
+name: Render Markdown via GitHub API and convert to PDF
 
 on:
   push:
@@ -13,6 +13,10 @@ permissions:
 jobs:
   md-to-pdf:
     runs-on: ubuntu-latest
+    env:
+      # Node script will use this token to call the Markdown API
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -24,10 +28,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y pandoc texlive-xetex texlive-fonts-recommended texlive-latex-recommended
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
       - name: Determine changed markdown files (exclude README.md)
         id: changed
@@ -36,74 +40,208 @@ jobs:
           BEFORE="${{ github.event.before }}"
           AFTER="${{ github.sha }}"
 
-          # If this is the initial commit, list all md files
           if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
             git ls-files '*.md' > all_md.txt || true
           else
             git diff --name-only "$BEFORE" "$AFTER" -- '*.md' > all_md.txt || true
           fi
 
-          # Filter out README.md (case-insensitive) anywhere in the repo
+          # Exclude README.md (case-insensitive) anywhere in the repo
           grep -v -Ei '(^|/)(readme)\.md$' all_md.txt > changed_md_filtered.txt || true
 
-          # Prepare a pipe-separated list for output (empty if none)
-          FILES=$(awk '{printf "%s|", $0}' changed_md_filtered.txt || true)
-          # Trim trailing pipe
-          FILES=${FILES%|}
+          # Write newline-separated list to GITHUB_OUTPUT (safe multiline)
+          echo "files<<EOF" >> "$GITHUB_OUTPUT"
+          if [ -s changed_md_filtered.txt ]; then
+            cat changed_md_filtered.txt >> "$GITHUB_OUTPUT"
+          fi
+          echo "EOF" >> "$GITHUB_OUTPUT"
 
-          echo "files=$FILES" >> $GITHUB_OUTPUT
-
-      - name: Convert changed markdown to PDF and commit if different
+      - name: Install Puppeteer and dependencies
         if: ${{ steps.changed.outputs.files != '' }}
         run: |
           set -euo pipefail
-          IFS='|' read -r -a FILES <<< "${{ steps.changed.outputs.files }}"
-          CHANGED=false
+          npm init -y
+          # Install puppeteer (downloads Chromium). If you prefer smaller install, use puppeteer-core + system Chromium.
+          npm install puppeteer@latest
 
-          for md in "${FILES[@]}"; do
-            [ -z "$md" ] && continue
+      - name: Convert changed markdown to PDF using GitHub Markdown API
+        if: ${{ steps.changed.outputs.files != '' }}
+        env:
+          FILES: ${{ steps.changed.outputs.files }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # create a small Node script to render via GitHub API and convert to PDF with Puppeteer
+          cat > convert-md-to-pdf.js <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const https = require('https');
+          const { promisify } = require('util');
+          const puppeteer = require('puppeteer');
 
-            pdf="${md%.md}.pdf"
-            mkdir -p "$(dirname "$pdf")"
+          const readFile = promisify(fs.readFile);
+          const writeFile = promisify(fs.writeFile);
+          const execSync = require('child_process').execSync;
 
-            # Convert using pandoc (adjust options for Obsidian specifics if needed)
-            pandoc "$md" -o "$pdf" --pdf-engine=xelatex || {
-              echo "pandoc failed for $md"
-              exit 1
+          const token = process.env.GITHUB_TOKEN;
+          const repo = process.env.REPO;
+          const filesEnv = process.env.FILES || '';
+          if (!filesEnv.trim()) {
+            console.log('No files to process');
+            process.exit(0);
+          }
+
+          const files = filesEnv.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+
+          async function renderMarkdownToHtml(markdown) {
+            const body = JSON.stringify({
+              text: markdown,
+              mode: "gfm",
+              context: repo
+            });
+
+            const options = {
+              hostname: 'api.github.com',
+              path: '/markdown',
+              method: 'POST',
+              headers: {
+                'User-Agent': 'github-actions-md-to-pdf',
+                'Accept': 'application/vnd.github.v3+json',
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(body),
+                'Authorization': `token ${token}`
+              }
+            };
+
+            return new Promise((resolve, reject) => {
+              const req = https.request(options, res => {
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => {
+                  if (res.statusCode >= 200 && res.statusCode < 300) {
+                    resolve(data);
+                  } else {
+                    reject(new Error(`GitHub API ${res.statusCode}: ${data}`));
+                  }
+                });
+              });
+              req.on('error', reject);
+              req.write(body);
+              req.end();
+            });
+          }
+
+          (async () => {
+            const browser = await puppeteer.launch({
+              args: ['--no-sandbox', '--disable-setuid-sandbox']
+            });
+
+            let anyStaged = false;
+
+            for (const mdPath of files) {
+              try {
+                console.log('Processing', mdPath);
+                const md = await readFile(mdPath, 'utf8');
+
+                // Render markdown to HTML via GitHub API
+                const htmlBody = await renderMarkdownToHtml(md);
+
+                // Wrap HTML in a minimal page and include GitHub markdown CSS for better fidelity
+                const html = `<!doctype html>
+                <html>
+                  <head>
+                    <meta charset="utf-8">
+                    <meta name="viewport" content="width=device-width,initial-scale=1">
+                    <title>${path.basename(mdPath)}</title>
+                    <link rel="stylesheet" href="https://github.githubassets.com/assets/gfm-0f3f6f0f.css">
+                    <style>
+                      body { padding: 40px; }
+                      .markdown-body { box-sizing: border-box; max-width: 980px; margin: 0 auto; }
+                    </style>
+                  </head>
+                  <body>
+                    <article class="markdown-body">
+                      ${htmlBody}
+                    </article>
+                  </body>
+                </html>`;
+
+                // Save temporary HTML (optional)
+                const tmpHtml = `/tmp/${path.basename(mdPath)}.html`;
+                await writeFile(tmpHtml, html, 'utf8');
+
+                // Convert to PDF
+                const pdfPath = mdPath.replace(/\.md$/i, '.pdf');
+                const page = await browser.newPage();
+                await page.setContent(html, { waitUntil: 'networkidle0' });
+                await page.pdf({ path: pdfPath, format: 'A4', printBackground: true, margin: { top: '20mm', bottom: '20mm', left: '15mm', right: '15mm' } });
+                await page.close();
+
+                // Compare with HEAD version (if exists) and stage if different
+                let needsAdd = false;
+                try {
+                  // write HEAD version to temp file
+                  const tmpOld = `/tmp/old_${path.basename(pdfPath)}`;
+                  const showCmd = `git show HEAD:"${pdfPath}" > "${tmpOld}" 2>/dev/null || true`;
+                  execSync(showCmd, { stdio: 'inherit' });
+                  if (!fs.existsSync(tmpOld)) {
+                    // no HEAD copy -> new file
+                    needsAdd = true;
+                  } else {
+                    // compare binary
+                    const cmpCmd = `cmp -s "${tmpOld}" "${pdfPath}"`;
+                    try {
+                      execSync(cmpCmd);
+                      // identical -> do nothing
+                      needsAdd = false;
+                    } catch (e) {
+                      // different
+                      needsAdd = true;
+                    }
+                    fs.unlinkSync(tmpOld);
+                  }
+                } catch (err) {
+                  // fallback: stage if any error
+                  needsAdd = true;
+                }
+
+                if (needsAdd) {
+                  execSync(`git add "${pdfPath}"`);
+                  anyStaged = true;
+                  console.log('Staged', pdfPath);
+                } else {
+                  console.log('No change for', pdfPath);
+                }
+
+              } catch (err) {
+                console.error('Error processing', mdPath, err && err.message ? err.message : err);
+                // continue with next file
+              }
             }
 
-            # If PDF not tracked yet, add it
-            if ! git ls-files --error-unmatch "$pdf" >/dev/null 2>&1; then
-              git add "$pdf"
-              CHANGED=true
-              echo "Staged new PDF: $pdf"
-            else
-              # Extract the version from HEAD to a temp file (if exists) and compare
-              TMP_OLD="/tmp/old_pdf_$(basename "$pdf")"
-              if git show HEAD:"$pdf" > "$TMP_OLD" 2>/dev/null; then
-                if ! cmp -s "$TMP_OLD" "$pdf"; then
-                  git add "$pdf"
-                  CHANGED=true
-                  echo "Staged updated PDF: $pdf"
-                else
-                  echo "No change in PDF: $pdf"
-                fi
-                rm -f "$TMP_OLD"
-              else
-                # HEAD doesn't have the file (shouldn't happen because ls-files said tracked), but handle anyway
-                git add "$pdf"
-                CHANGED=true
-                echo "Staged PDF (no HEAD copy): $pdf"
-              fi
-            fi
-          done
+            await browser.close();
 
-          if [ "$CHANGED" = "true" ]; then
-            git commit -m "chore: update PDFs generated from changed markdown files" || echo "nothing to commit"
-            git push origin HEAD:main
-          else
-            echo "No PDF changes to commit"
-          fi
+            if (anyStaged) {
+              try {
+                execSync('git commit -m "chore: update PDFs generated from changed markdown files" || true', { stdio: 'inherit' });
+                execSync('git push origin HEAD:main', { stdio: 'inherit' });
+                console.log('Committed and pushed updated PDFs');
+              } catch (err) {
+                console.error('Commit/push failed', err && err.message ? err.message : err);
+                process.exit(1);
+              }
+            } else {
+              console.log('No PDF changes to commit');
+            }
+          })().catch(err => {
+            console.error(err);
+            process.exit(1);
+          });
+          NODE
+
+          # run the node script
+          node convert-md-to-pdf.js
 
       - name: No changed markdown files
         if: ${{ steps.changed.outputs.files == '' }}
