@@ -1,4 +1,4 @@
-name: Obsidian-style Markdown -> PDF (Electron, /dev/shm + GPU fixes)
+name: Markdown -> PDF (Chromium + puppeteer-core)
 
 on:
   push:
@@ -17,7 +17,7 @@ jobs:
       REPO: ${{ github.repository }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -45,23 +45,17 @@ jobs:
           fi
           echo "EOF" >> "$GITHUB_OUTPUT"
 
-      - name: Install system deps (Chromium/Electron prerequisites)
+      - name: Install system Chromium and deps
         if: ${{ steps.changed.outputs.files != '' }}
         run: |
           set -euo pipefail
           sudo apt-get update -y
-          sudo apt-get install -y --no-install-recommends \
-            xvfb \
-            libgtk-3-0 \
-            libxss1 \
-            libnss3 \
-            libx11-xcb1 \
-            libxcomposite1 \
-            libxdamage1 \
-            libxrandr2 \
-            libgbm1 \
-            fonts-liberation \
-            ca-certificates
+          # Try to install chromium; some images provide different package names
+          sudo apt-get install -y --no-install-recommends chromium-browser chromium || true
+          # Ensure /dev/shm is writable (fixes shared memory errors)
+          if [ -d /dev/shm ]; then
+            sudo chmod 1777 /dev/shm || true
+          fi
 
       - name: Setup Node.js
         if: ${{ steps.changed.outputs.files != '' }}
@@ -69,14 +63,15 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install Node packages (electron + renderer libs)
+      - name: Install Node packages (puppeteer-core + renderer libs)
         if: ${{ steps.changed.outputs.files != '' }}
         run: |
           set -euo pipefail
           npm init -y
-          npm install --no-audit --no-fund electron@latest markdown-it markdown-it-footnote markdown-it-deflist markdown-it-abbr markdown-it-attrs highlight.js
+          # puppeteer-core avoids downloading Chromium; we'll use system chromium
+          npm install --no-audit --no-fund puppeteer-core markdown-it markdown-it-footnote markdown-it-deflist markdown-it-abbr markdown-it-attrs highlight.js
 
-      - name: Convert changed markdown to PDF using Electron (fix /dev/shm + GPU)
+      - name: Convert changed markdown to PDF (puppeteer-core)
         if: ${{ steps.changed.outputs.files != '' }}
         env:
           FILES: ${{ steps.changed.outputs.files }}
@@ -84,18 +79,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-
-          # Ensure /dev/shm is writable by all (fixes "Unable to access /dev/shm" errors)
-          if [ -d /dev/shm ]; then
-            sudo chmod 1777 /dev/shm || true
-          fi
-
-          # Create the Electron script
-          cat > electron-print.js <<'NODE'
+          cat > convert-md-to-pdf.js <<'NODE'
           const fs = require('fs');
           const path = require('path');
           const { execSync } = require('child_process');
-          const { app, BrowserWindow } = require('electron');
+          const puppeteer = require('puppeteer-core');
           const MarkdownIt = require('markdown-it');
           const md = MarkdownIt({ html: true, linkify: true, typographer: true })
             .use(require('markdown-it-footnote'))
@@ -103,14 +91,6 @@ jobs:
             .use(require('markdown-it-abbr'))
             .use(require('markdown-it-attrs'));
           const hljs = require('highlight.js');
-
-          // CI-friendly Chromium switches to avoid /dev/shm and GPU issues
-          app.commandLine.appendSwitch('no-sandbox');
-          app.commandLine.appendSwitch('disable-setuid-sandbox');
-          app.commandLine.appendSwitch('disable-dev-shm-usage');
-          app.commandLine.appendSwitch('disable-gpu');
-          app.commandLine.appendSwitch('disable-software-rasterizer');
-          app.commandLine.appendSwitch('single-process');
 
           md.set({
             highlight: function (str, lang) {
@@ -127,7 +107,29 @@ jobs:
 
           const filesEnv = process.env.FILES || '';
           const files = filesEnv.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+          if (files.length === 0) {
+            console.log('No files to process');
+            process.exit(0);
+          }
 
+          // Detect system chromium executable
+          const candidates = [
+            '/usr/bin/chromium-browser',
+            '/usr/bin/chromium',
+            '/snap/bin/chromium',
+            '/usr/bin/google-chrome-stable'
+          ];
+          let executablePath = null;
+          for (const p of candidates) {
+            if (fs.existsSync(p)) { executablePath = p; break; }
+          }
+          if (!executablePath) {
+            console.error('No system Chromium found. Ensure chromium is installed on the runner.');
+            process.exit(2);
+          }
+          console.log('Using Chromium at', executablePath);
+
+          // Load optional Obsidian CSS
           let themeCss = '';
           const themePath = path.join(process.cwd(), '.obsidian', 'export.css');
           if (fs.existsSync(themePath)) {
@@ -143,33 +145,11 @@ jobs:
             `;
           }
 
-          function buildHtml(title, content) {
-            return `<!doctype html>
-            <html>
-              <head>
-                <meta charset="utf-8">
-                <meta name="viewport" content="width=device-width,initial-scale=1">
-                <title>${title}</title>
-                <style>${themeCss}</style>
-              </head>
-              <body>
-                <article class="markdown-body">
-                  ${content}
-                </article>
-              </body>
-            </html>`;
-          }
-
-          app.whenReady().then(async () => {
-            const win = new BrowserWindow({
-              width: 1200,
-              height: 1600,
-              show: false,
-              webPreferences: {
-                sandbox: false,
-                nodeIntegration: false,
-                contextIsolation: true
-              }
+          (async () => {
+            const browser = await puppeteer.launch({
+              executablePath,
+              args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+              headless: true
             });
 
             let anyStaged = false;
@@ -179,25 +159,30 @@ jobs:
                 console.log('Processing', mdPath);
                 const markdown = fs.readFileSync(mdPath, 'utf8');
                 const htmlBody = md.render(markdown);
-                const html = buildHtml(path.basename(mdPath), htmlBody);
+                const html = `<!doctype html>
+                <html>
+                  <head>
+                    <meta charset="utf-8">
+                    <meta name="viewport" content="width=device-width,initial-scale=1">
+                    <title>${path.basename(mdPath)}</title>
+                    <style>${themeCss}</style>
+                  </head>
+                  <body>
+                    <article class="markdown-body">${htmlBody}</article>
+                  </body>
+                </html>`;
 
-                await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
-                await new Promise(r => setTimeout(r, 250));
-
+                const page = await browser.newPage();
+                await page.setContent(html, { waitUntil: 'networkidle0' });
                 const pdfPath = mdPath.replace(/\.md$/i, '.pdf');
-                const pdfData = await win.webContents.printToPDF({
-                  printBackground: true,
-                  landscape: false,
-                  pageSize: 'A4',
-                  marginsType: 1
-                });
-
-                fs.writeFileSync(pdfPath, pdfData);
+                await page.pdf({ path: pdfPath, format: 'A4', printBackground: true, landscape: false, margin: { top: '20mm', bottom: '20mm', left: '15mm', right: '15mm' } });
+                await page.close();
                 console.log('Wrote PDF:', pdfPath);
 
+                // Compare with HEAD version and stage if different
                 let needsAdd = false;
                 try {
-                  const tmpOld = path.join('/tmp', 'old_' + path.basename(pdfPath));
+                  const tmpOld = `/tmp/old_${path.basename(pdfPath)}`;
                   try { execSync(`git show HEAD:"${pdfPath}" > "${tmpOld}" 2>/dev/null || true`); } catch (e) {}
                   if (!fs.existsSync(tmpOld)) {
                     needsAdd = true;
@@ -224,6 +209,8 @@ jobs:
               }
             }
 
+            await browser.close();
+
             if (anyStaged) {
               try {
                 execSync('git commit -m "chore: update PDFs generated from changed markdown files" || true', { stdio: 'inherit' });
@@ -236,25 +223,13 @@ jobs:
             } else {
               console.log('No PDF changes to commit');
             }
-
-            app.quit();
-          }).catch(err => {
+          })().catch(err => {
             console.error(err);
-            app.quit();
             process.exit(1);
           });
           NODE
 
-          # Install electron and run
-          npm install --no-audit --no-fund electron@latest
-          # Try to fix chrome-sandbox ownership (optional)
-          if [ -f node_modules/electron/dist/chrome-sandbox ]; then
-            sudo chown root:root node_modules/electron/dist/chrome-sandbox || true
-            sudo chmod 4755 node_modules/electron/dist/chrome-sandbox || true
-          fi
-
-          # Run Electron under Xvfb
-          xvfb-run --auto-servernum --server-args='-screen 0 1280x1024x24' npx electron electron-print.js
+          node convert-md-to-pdf.js
 
       - name: No changed markdown files
         if: ${{ steps.changed.outputs.files == '' }}
