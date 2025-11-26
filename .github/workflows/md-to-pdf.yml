@@ -1,4 +1,4 @@
-name: Render Markdown via GitHub API and convert to PDF
+name: Obsidian-style Markdown -> PDF
 
 on:
   push:
@@ -14,24 +14,18 @@ jobs:
   md-to-pdf:
     runs-on: ubuntu-latest
     env:
-      # Node script will use this token to call the Markdown API
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       REPO: ${{ github.repository }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Configure git user
+      - name: Configure git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Install Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
 
       - name: Determine changed markdown files (exclude README.md)
         id: changed
@@ -46,25 +40,36 @@ jobs:
             git diff --name-only "$BEFORE" "$AFTER" -- '*.md' > all_md.txt || true
           fi
 
-          # Exclude README.md (case-insensitive) anywhere in the repo
+          # Exclude README.md (case-insensitive)
           grep -v -Ei '(^|/)(readme)\.md$' all_md.txt > changed_md_filtered.txt || true
 
-          # Write newline-separated list to GITHUB_OUTPUT (safe multiline)
           echo "files<<EOF" >> "$GITHUB_OUTPUT"
           if [ -s changed_md_filtered.txt ]; then
             cat changed_md_filtered.txt >> "$GITHUB_OUTPUT"
           fi
           echo "EOF" >> "$GITHUB_OUTPUT"
 
-      - name: Install Puppeteer and dependencies
+      - name: Install system deps (Chromium/Electron prerequisites)
+        if: ${{ steps.changed.outputs.files != '' }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y xvfb libgtk-3-0 libxss1 libasound2 libnss3 libx11-xcb1 libxcomposite1 libxdamage1 libxrandr2 libgbm1
+
+      - name: Setup Node.js
+        if: ${{ steps.changed.outputs.files != '' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Node packages (electron + renderer libs)
         if: ${{ steps.changed.outputs.files != '' }}
         run: |
           set -euo pipefail
           npm init -y
-          # Install puppeteer (downloads Chromium). If you prefer smaller install, use puppeteer-core + system Chromium.
-          npm install puppeteer@latest
+          npm install electron@latest markdown-it markdown-it-footnote markdown-it-deflist markdown-it-abbr markdown-it-attrs highlight.js
 
-      - name: Convert changed markdown to PDF using GitHub Markdown API
+      - name: Convert changed markdown to PDF using Electron
         if: ${{ steps.changed.outputs.files != '' }}
         env:
           FILES: ${{ steps.changed.outputs.files }}
@@ -72,69 +77,93 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          # create a small Node script to render via GitHub API and convert to PDF with Puppeteer
-          cat > convert-md-to-pdf.js <<'NODE'
+          # create the electron script
+          cat > electron-print.js <<'NODE'
           const fs = require('fs');
           const path = require('path');
-          const https = require('https');
-          const { promisify } = require('util');
-          const puppeteer = require('puppeteer');
+          const { execSync } = require('child_process');
+          const { app, BrowserWindow } = require('electron');
+          const md = require('markdown-it')({
+            html: true,
+            linkify: true,
+            typographer: true
+          }).use(require('markdown-it-footnote'))
+            .use(require('markdown-it-deflist'))
+            .use(require('markdown-it-abbr'))
+            .use(require('markdown-it-attrs'));
+          const hljs = require('highlight.js');
 
-          const readFile = promisify(fs.readFile);
-          const writeFile = promisify(fs.writeFile);
-          const execSync = require('child_process').execSync;
+          // highlight code blocks
+          md.set({
+            highlight: function (str, lang) {
+              try {
+                if (lang && hljs.getLanguage(lang)) {
+                  return '<pre class="hljs"><code>' +
+                         hljs.highlight(str, { language: lang, ignoreIllegals: true }).value +
+                         '</code></pre>';
+                }
+              } catch (e) {}
+              return '<pre class="hljs"><code>' + md.utils.escapeHtml(str) + '</code></pre>';
+            }
+          });
 
-          const token = process.env.GITHUB_TOKEN;
-          const repo = process.env.REPO;
           const filesEnv = process.env.FILES || '';
-          if (!filesEnv.trim()) {
-            console.log('No files to process');
-            process.exit(0);
-          }
+          const repo = process.env.REPO || '';
+          const token = process.env.GITHUB_TOKEN || '';
 
           const files = filesEnv.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
 
-          async function renderMarkdownToHtml(markdown) {
-            const body = JSON.stringify({
-              text: markdown,
-              mode: "gfm",
-              context: repo
-            });
-
-            const options = {
-              hostname: 'api.github.com',
-              path: '/markdown',
-              method: 'POST',
-              headers: {
-                'User-Agent': 'github-actions-md-to-pdf',
-                'Accept': 'application/vnd.github.v3+json',
-                'Content-Type': 'application/json',
-                'Content-Length': Buffer.byteLength(body),
-                'Authorization': `token ${token}`
-              }
-            };
-
-            return new Promise((resolve, reject) => {
-              const req = https.request(options, res => {
-                let data = '';
-                res.on('data', chunk => data += chunk);
-                res.on('end', () => {
-                  if (res.statusCode >= 200 && res.statusCode < 300) {
-                    resolve(data);
-                  } else {
-                    reject(new Error(`GitHub API ${res.statusCode}: ${data}`));
-                  }
-                });
-              });
-              req.on('error', reject);
-              req.write(body);
-              req.end();
-            });
+          // load optional Obsidian CSS if present
+          let themeCss = '';
+          const themePath = path.join(process.cwd(), '.obsidian', 'export.css');
+          if (fs.existsSync(themePath)) {
+            themeCss = fs.readFileSync(themePath, 'utf8');
+            console.log('Using .obsidian/export.css for styling');
+          } else {
+            // fallback minimal CSS + highlight.js default style
+            themeCss = `
+            /* Minimal page styling */
+            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial; padding: 28px; color: #222; background: #fff; }
+            .markdown-body { max-width: 980px; margin: 0 auto; }
+            pre { background: #f6f8fa; padding: 12px; border-radius: 6px; overflow: auto; }
+            code { font-family: "SFMono-Regular", Menlo, Monaco, "Roboto Mono", "Courier New", monospace; }
+            /* include highlight.js default */
+            ${require('highlight.js').getStyleSheet ? require('highlight.js').getStyleSheet() : ''}
+            `;
           }
 
-          (async () => {
-            const browser = await puppeteer.launch({
-              args: ['--no-sandbox', '--disable-setuid-sandbox']
+          // create a data URL wrapper for HTML
+          function buildHtml(title, content) {
+            return `<!doctype html>
+            <html>
+              <head>
+                <meta charset="utf-8">
+                <meta name="viewport" content="width=device-width,initial-scale=1">
+                <title>${title}</title>
+                <style>
+                  ${themeCss}
+                </style>
+              </head>
+              <body>
+                <article class="markdown-body">
+                  ${content}
+                </article>
+              </body>
+            </html>`;
+          }
+
+          // Electron app lifecycle
+          app.whenReady().then(async () => {
+            // create a hidden BrowserWindow for printing
+            const win = new BrowserWindow({
+              width: 1200,
+              height: 1600,
+              show: false,
+              webPreferences: {
+                sandbox: false,
+                nodeIntegration: false,
+                contextIsolation: true
+              }
             });
 
             let anyStaged = false;
@@ -142,67 +171,43 @@ jobs:
             for (const mdPath of files) {
               try {
                 console.log('Processing', mdPath);
-                const md = await readFile(mdPath, 'utf8');
+                const markdown = fs.readFileSync(mdPath, 'utf8');
+                const htmlBody = md.render(markdown);
+                const html = buildHtml(path.basename(mdPath), htmlBody);
 
-                // Render markdown to HTML via GitHub API
-                const htmlBody = await renderMarkdownToHtml(md);
+                // load content
+                await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+                // wait for networkidle-like (small delay)
+                await new Promise(r => setTimeout(r, 250));
 
-                // Wrap HTML in a minimal page and include GitHub markdown CSS for better fidelity
-                const html = `<!doctype html>
-                <html>
-                  <head>
-                    <meta charset="utf-8">
-                    <meta name="viewport" content="width=device-width,initial-scale=1">
-                    <title>${path.basename(mdPath)}</title>
-                    <link rel="stylesheet" href="https://github.githubassets.com/assets/gfm-0f3f6f0f.css">
-                    <style>
-                      body { padding: 40px; }
-                      .markdown-body { box-sizing: border-box; max-width: 980px; margin: 0 auto; }
-                    </style>
-                  </head>
-                  <body>
-                    <article class="markdown-body">
-                      ${htmlBody}
-                    </article>
-                  </body>
-                </html>`;
-
-                // Save temporary HTML (optional)
-                const tmpHtml = `/tmp/${path.basename(mdPath)}.html`;
-                await writeFile(tmpHtml, html, 'utf8');
-
-                // Convert to PDF
+                // print to PDF with A4 portrait
                 const pdfPath = mdPath.replace(/\.md$/i, '.pdf');
-                const page = await browser.newPage();
-                await page.setContent(html, { waitUntil: 'networkidle0' });
-                await page.pdf({ path: pdfPath, format: 'A4', printBackground: true, margin: { top: '20mm', bottom: '20mm', left: '15mm', right: '15mm' } });
-                await page.close();
+                const pdfData = await win.webContents.printToPDF({
+                  printBackground: true,
+                  landscape: false,
+                  pageSize: 'A4',
+                  marginsType: 1
+                });
 
-                // Compare with HEAD version (if exists) and stage if different
+                fs.writeFileSync(pdfPath, pdfData);
+                console.log('Wrote PDF:', pdfPath);
+
+                // compare with HEAD version
                 let needsAdd = false;
                 try {
-                  // write HEAD version to temp file
-                  const tmpOld = `/tmp/old_${path.basename(pdfPath)}`;
-                  const showCmd = `git show HEAD:"${pdfPath}" > "${tmpOld}" 2>/dev/null || true`;
-                  execSync(showCmd, { stdio: 'inherit' });
+                  const tmpOld = path.join('/tmp', 'old_' + path.basename(pdfPath));
+                  try {
+                    execSync(`git show HEAD:"${pdfPath}" > "${tmpOld}" 2>/dev/null || true`);
+                  } catch (e) {}
                   if (!fs.existsSync(tmpOld)) {
-                    // no HEAD copy -> new file
                     needsAdd = true;
                   } else {
-                    // compare binary
-                    const cmpCmd = `cmp -s "${tmpOld}" "${pdfPath}"`;
-                    try {
-                      execSync(cmpCmd);
-                      // identical -> do nothing
-                      needsAdd = false;
-                    } catch (e) {
-                      // different
-                      needsAdd = true;
-                    }
+                    const oldBuf = fs.readFileSync(tmpOld);
+                    const newBuf = fs.readFileSync(pdfPath);
+                    if (!oldBuf.equals(newBuf)) needsAdd = true;
                     fs.unlinkSync(tmpOld);
                   }
-                } catch (err) {
-                  // fallback: stage if any error
+                } catch (e) {
                   needsAdd = true;
                 }
 
@@ -215,12 +220,10 @@ jobs:
                 }
 
               } catch (err) {
-                console.error('Error processing', mdPath, err && err.message ? err.message : err);
-                // continue with next file
+                console.error('Error processing', mdPath, err && err.stack ? err.stack : err);
+                // continue to next file
               }
             }
-
-            await browser.close();
 
             if (anyStaged) {
               try {
@@ -234,14 +237,17 @@ jobs:
             } else {
               console.log('No PDF changes to commit');
             }
-          })().catch(err => {
+
+            app.quit();
+          }).catch(err => {
             console.error(err);
+            app.quit();
             process.exit(1);
           });
           NODE
 
-          # run the node script
-          node convert-md-to-pdf.js
+          # run the electron script under xvfb (Electron needs an X server on ubuntu runners)
+          xvfb-run --auto-servernum --server-args='-screen 0 1280x1024x24' node electron-print.js
 
       - name: No changed markdown files
         if: ${{ steps.changed.outputs.files == '' }}
