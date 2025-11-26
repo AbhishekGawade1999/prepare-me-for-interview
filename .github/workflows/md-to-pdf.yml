@@ -1,0 +1,57 @@
+name: MD to PDF on commit
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '**/*.md'
+      - '!.github/**'
+    paths-ignore:
+      - 'README.md'
+
+jobs:
+  md-to-pdf:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pandoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pandoc
+
+      - name: Get changed markdown files (excluding README.md)
+        id: changed-md
+        run: |
+          set -e
+          files=$(git diff --name-only HEAD~1 HEAD -- '*.md' ':!README.md')
+          echo "Changed markdown files:"
+          echo "$files"
+          # Convert list into JSON array-like string for GH Actions
+          files="${files//$'\n'/' '}"
+          echo "files=$files" >> $GITHUB_OUTPUT
+
+      - name: Convert MD to PDF
+        if: steps.changed-md.outputs.files != ''
+        run: |
+          set -e
+          for file in ${{ steps.changed-md.outputs.files }}; do
+            [ -f "$file" ] || continue
+            pdf="${file%.md}.pdf"
+            echo "Converting $file -> $pdf"
+            pandoc "$file" -o "$pdf"
+          done
+
+      - name: Commit PDFs
+        if: steps.changed-md.outputs.files != ''
+        uses: EndBug/add-and-commit@v9
+        with:
+          add: "*.pdf"
+          message: "Auto-generate PDFs from changed markdown"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
