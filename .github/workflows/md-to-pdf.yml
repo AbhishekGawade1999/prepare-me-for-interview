@@ -21,37 +21,81 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          node-version: '20'
+          python-version: '3.11'
 
-      - name: Install md-to-pdf
-        run: npm install -g md-to-pdf
+      - name: Install dependencies
+        run: |
+          pip install markdown weasyprint
 
       - name: Convert changed MD files to PDF
         run: |
-          # For manual runs or first commit, fall back to all md files except README.md
-          if git rev-parse HEAD^ >/dev/null 2>&1; then
-            CHANGED_FILES=$(git diff --name-only HEAD^ HEAD -- '*.md' ':!README.md')
-          else
-            CHANGED_FILES=$(git ls-files '*.md' ':!README.md')
-          fi
+          python3 << 'EOF'
+          import os
+          import subprocess
+          from markdown import markdown
+          from weasyprint import HTML
 
-          echo "Changed markdown files:"
-          echo "$CHANGED_FILES"
+          # Get changed markdown files
+          try:
+              result = subprocess.run(
+                  ['git', 'diff', '--name-only', 'HEAD^', 'HEAD', '--', '*.md', ':!README.md'],
+                  capture_output=True,
+                  text=True,
+                  check=True
+              )
+              changed_files = result.stdout.strip().split('\n')
+          except subprocess.CalledProcessError:
+              # Fallback for manual runs or first commit
+              result = subprocess.run(
+                  ['git', 'ls-files', '*.md', ':!README.md'],
+                  capture_output=True,
+                  text=True,
+                  check=True
+              )
+              changed_files = result.stdout.strip().split('\n')
 
-          if [ -z "$CHANGED_FILES" ]; then
-            echo "No markdown files to process."
-            exit 0
-          fi
+          changed_files = [f for f in changed_files if f and os.path.isfile(f)]
 
-          echo "$CHANGED_FILES" | while IFS= read -r file; do
-            [ -f "$file" ] || continue
-            pdf="${file%.md}.pdf"
-            echo "Converting $file -> $pdf"
-            md-to-pdf "$file" --pdf-options '{"format": "A4"}'
-          done
+          if not changed_files:
+              print("No markdown files to process.")
+              exit(0)
+
+          print(f"Converting {len(changed_files)} file(s):")
+          for md_file in changed_files:
+              print(f"  - {md_file}")
+              pdf_file = md_file.replace('.md', '.pdf')
+              
+              # Read markdown and convert to HTML
+              with open(md_file, 'r', encoding='utf-8') as f:
+                  md_content = f.read()
+              
+              html_content = markdown(md_content, extensions=['tables', 'fenced_code'])
+              
+              # Add basic styling
+              styled_html = f"""
+              <html>
+              <head>
+                  <style>
+                      body {{ font-family: Arial, sans-serif; margin: 40px; }}
+                      code {{ background-color: #f4f4f4; padding: 2px 4px; }}
+                      pre {{ background-color: #f4f4f4; padding: 10px; }}
+                      table {{ border-collapse: collapse; width: 100%; }}
+                      th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+                  </style>
+              </head>
+              <body>
+                  {html_content}
+              </body>
+              </html>
+              """
+              
+              # Convert to PDF
+              HTML(string=styled_html).write_pdf(pdf_file)
+              print(f"✓ Created {pdf_file}")
+          EOF
 
       - name: Commit PDFs
         run: |
