@@ -501,7 +501,6 @@
 # Courses
 
 ## Free
-- https://www.youtube.com/watch?v=rfscVS0vtbw
-
+- <https://www.youtube.com/watch?v=rfscVS0vtbw>
 ## Paid
-- https://learn.kodekloud.com/courses/python-basics
+- <https://learn.kodekloud.com/courses/python-basics>
