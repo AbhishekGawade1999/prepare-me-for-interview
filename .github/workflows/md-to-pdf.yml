@@ -28,15 +28,14 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install markdown weasyprint
+          pip install md2pdf
 
       - name: Convert changed MD files to PDF
         run: |
           python3 << 'EOF'
           import os
           import subprocess
-          from markdown import markdown
-          from weasyprint import HTML
+          from md2pdf.core import md2pdf
 
           # Get changed markdown files
           try:
@@ -65,36 +64,19 @@ jobs:
 
           print(f"Converting {len(changed_files)} file(s):")
           for md_file in changed_files:
-              print(f"  - {md_file}")
               pdf_file = md_file.replace('.md', '.pdf')
+              print(f"  Converting {md_file} -> {pdf_file}")
               
-              # Read markdown and convert to HTML
-              with open(md_file, 'r', encoding='utf-8') as f:
-                  md_content = f.read()
+              # Get the directory of the markdown file for relative paths
+              base_url = os.path.dirname(os.path.abspath(md_file))
               
-              html_content = markdown(md_content, extensions=['tables', 'fenced_code'])
-              
-              # Add basic styling
-              styled_html = f"""
-              <html>
-              <head>
-                  <style>
-                      body {{ font-family: Arial, sans-serif; margin: 40px; }}
-                      code {{ background-color: #f4f4f4; padding: 2px 4px; }}
-                      pre {{ background-color: #f4f4f4; padding: 10px; }}
-                      table {{ border-collapse: collapse; width: 100%; }}
-                      th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-                  </style>
-              </head>
-              <body>
-                  {html_content}
-              </body>
-              </html>
-              """
-              
-              # Convert to PDF
-              HTML(string=styled_html).write_pdf(pdf_file)
-              print(f"✓ Created {pdf_file}")
+              # Convert markdown to PDF with proper styling
+              md2pdf(
+                  pdf_file,
+                  md_file_path=md_file,
+                  base_url=base_url
+              )
+              print(f"  ✓ Created {pdf_file}")
           EOF
 
       - name: Commit PDFs
