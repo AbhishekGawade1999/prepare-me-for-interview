@@ -26,11 +26,10 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Pandoc and dependencies
+      - name: Install Pandoc and LaTeX
         run: |
           sudo apt-get update
           sudo apt-get install -y pandoc texlive-latex-base texlive-fonts-recommended texlive-latex-extra
-          pip install pandoc-link-filter
 
       - name: Convert changed MD files to PDF
         run: |
@@ -68,14 +67,15 @@ jobs:
               with open(md_file, 'r', encoding='utf-8') as f:
                   content = f.read()
               
-              # Convert Obsidian wikilinks [[link]] or [[link|alias]] to standard markdown
+              # Convert Obsidian wikilinks [[link|alias]] to [alias](link)
               content = re.sub(r'\[\[([^\]|]+)\|([^\]]+)\]\]', r'[\2](\1)', content)
+              # Convert [[link]] to [link](link)
               content = re.sub(r'\[\[([^\]]+)\]\]', r'[\1](\1)', content)
               
               # Convert highlights ==text== to bold
               content = re.sub(r'==([^=]+)==', r'**\1**', content)
               
-              # Remove embeds ![[image]] (pandoc can't handle them easily)
+              # Convert embeds ![[image]] to placeholder text
               content = re.sub(r'!\[\[([^\]]+)\]\]', r'*[Image: \1]*', content)
               
               # Save preprocessed file
@@ -88,7 +88,8 @@ jobs:
                   'pandoc', temp_file,
                   '-o', pdf_file,
                   '--pdf-engine=pdflatex',
-                  '-V', 'geometry:margin=1in'
+                  '-V', 'geometry:margin=1in',
+                  '-V', 'fontsize=11pt'
               ], check=True)
               
               # Clean up temp file
