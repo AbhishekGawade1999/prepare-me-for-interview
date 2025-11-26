@@ -1,5 +1,4 @@
-name: Markdown -> PDF (Chromium + puppeteer-core)
-
+name: Markdown -> PDF
 on:
   push:
     branches:
@@ -11,226 +10,131 @@ permissions:
   contents: write
 
 jobs:
-  md-to-pdf:
+  convert-md-to-pdf:
     runs-on: ubuntu-latest
-    env:
-      REPO: ${{ github.repository }}
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Configure git user
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Determine changed markdown files (exclude README.md)
-        id: changed
-        run: |
-          set -euo pipefail
-          BEFORE="${{ github.event.before }}"
-          AFTER="${{ github.sha }}"
-          if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
-            git ls-files '*.md' > all_md.txt || true
-          else
-            git diff --name-only "$BEFORE" "$AFTER" -- '*.md' > all_md.txt || true
-          fi
-          grep -v -Ei '(^|/)(readme)\.md$' all_md.txt > changed_md_filtered.txt || true
-          echo "files<<EOF" >> "$GITHUB_OUTPUT"
-          if [ -s changed_md_filtered.txt ]; then
-            cat changed_md_filtered.txt >> "$GITHUB_OUTPUT"
-          fi
-          echo "EOF" >> "$GITHUB_OUTPUT"
-
-      - name: Install system Chromium and deps
-        if: ${{ steps.changed.outputs.files != '' }}
-        run: |
-          set -euo pipefail
-          sudo apt-get update -y
-          # Try to install chromium; some images provide different package names
-          sudo apt-get install -y --no-install-recommends chromium-browser chromium || true
-          # Ensure /dev/shm is writable (fixes shared memory errors)
-          if [ -d /dev/shm ]; then
-            sudo chmod 1777 /dev/shm || true
-          fi
-
       - name: Setup Node.js
-        if: ${{ steps.changed.outputs.files != '' }}
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Install Node packages (puppeteer-core + renderer libs)
-        if: ${{ steps.changed.outputs.files != '' }}
+      - name: Install md-to-pdf with GitHub styling
         run: |
-          set -euo pipefail
-          npm init -y
-          # puppeteer-core avoids downloading Chromium; we'll use system chromium
-          npm install --no-audit --no-fund puppeteer-core markdown-it markdown-it-footnote markdown-it-deflist markdown-it-abbr markdown-it-attrs highlight.js
+          npm install -g md-to-pdf
+          npm install -g github-markdown-css
 
-      - name: Convert changed markdown to PDF (puppeteer-core)
-        if: ${{ steps.changed.outputs.files != '' }}
-        env:
-          FILES: ${{ steps.changed.outputs.files }}
-          REPO: ${{ github.repository }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create PDF style configuration
         run: |
-          set -euo pipefail
-          cat > convert-md-to-pdf.js <<'NODE'
-          const fs = require('fs');
-          const path = require('path');
-          const { execSync } = require('child_process');
-          const puppeteer = require('puppeteer-core');
-          const MarkdownIt = require('markdown-it');
-          const md = MarkdownIt({ html: true, linkify: true, typographer: true })
-            .use(require('markdown-it-footnote'))
-            .use(require('markdown-it-deflist'))
-            .use(require('markdown-it-abbr'))
-            .use(require('markdown-it-attrs'));
-          const hljs = require('highlight.js');
+          cat > pdf-config.json << 'EOF'
+          {
+            "stylesheet": "https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.5.1/github-markdown.min.css",
+            "body_class": "markdown-body",
+            "pdf_options": {
+              "format": "A4",
+              "margin": {
+                "top": "20mm",
+                "right": "20mm",
+                "bottom": "20mm",
+                "left": "20mm"
+              },
+              "printBackground": true
+            },
+            "stylesheet_encoding": "utf-8"
+          }
+          EOF
 
-          md.set({
-            highlight: function (str, lang) {
-              try {
-                if (lang && hljs.getLanguage(lang)) {
-                  return '<pre class="hljs"><code>' +
-                         hljs.highlight(str, { language: lang, ignoreIllegals: true }).value +
-                         '</code></pre>';
+      - name: Find and convert Markdown files to PDF
+        run: |
+          # Find all .md files excluding README files
+          find . -type f -name "*.md" ! -name "README*.md" ! -name "readme*.md" ! -path "*/node_modules/*" ! -path "*/.git/*" | while read -r file; do
+            echo "Converting: $file"
+            # Get the directory and filename
+            dir=$(dirname "$file")
+            filename=$(basename "$file" .md)
+            
+            # Create a temporary HTML wrapper for better GitHub styling
+            cat > "/tmp/temp_wrapper.html" << 'HTMLEOF'
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="utf-8">
+            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.5.1/github-markdown.min.css">
+            <style>
+              .markdown-body {
+                box-sizing: border-box;
+                min-width: 200px;
+                max-width: 980px;
+                margin: 0 auto;
+                padding: 45px;
+              }
+              @media print {
+                .markdown-body {
+                  padding: 20px;
                 }
-              } catch (e) {}
-              return '<pre class="hljs"><code>' + md.utils.escapeHtml(str) + '</code></pre>';
-            }
-          });
-
-          const filesEnv = process.env.FILES || '';
-          const files = filesEnv.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-          if (files.length === 0) {
-            console.log('No files to process');
-            process.exit(0);
-          }
-
-          // Detect system chromium executable
-          const candidates = [
-            '/usr/bin/chromium-browser',
-            '/usr/bin/chromium',
-            '/snap/bin/chromium',
-            '/usr/bin/google-chrome-stable'
-          ];
-          let executablePath = null;
-          for (const p of candidates) {
-            if (fs.existsSync(p)) { executablePath = p; break; }
-          }
-          if (!executablePath) {
-            console.error('No system Chromium found. Ensure chromium is installed on the runner.');
-            process.exit(2);
-          }
-          console.log('Using Chromium at', executablePath);
-
-          // Load optional Obsidian CSS
-          let themeCss = '';
-          const themePath = path.join(process.cwd(), '.obsidian', 'export.css');
-          if (fs.existsSync(themePath)) {
-            themeCss = fs.readFileSync(themePath, 'utf8');
-            console.log('Using .obsidian/export.css for styling');
-          } else {
-            themeCss = `
-            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial; padding: 28px; color: #222; background: #fff; }
-            .markdown-body { max-width: 980px; margin: 0 auto; }
-            pre { background: #f6f8fa; padding: 12px; border-radius: 6px; overflow: auto; }
-            code { font-family: "SFMono-Regular", Menlo, Monaco, "Roboto Mono", "Courier New", monospace; }
-            .hljs { background: transparent; }
-            `;
-          }
-
-          (async () => {
-            const browser = await puppeteer.launch({
-              executablePath,
-              args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
-              headless: true
-            });
-
-            let anyStaged = false;
-
-            for (const mdPath of files) {
-              try {
-                console.log('Processing', mdPath);
-                const markdown = fs.readFileSync(mdPath, 'utf8');
-                const htmlBody = md.render(markdown);
-                const html = `<!doctype html>
-                <html>
-                  <head>
-                    <meta charset="utf-8">
-                    <meta name="viewport" content="width=device-width,initial-scale=1">
-                    <title>${path.basename(mdPath)}</title>
-                    <style>${themeCss}</style>
-                  </head>
-                  <body>
-                    <article class="markdown-body">${htmlBody}</article>
-                  </body>
-                </html>`;
-
-                const page = await browser.newPage();
-                await page.setContent(html, { waitUntil: 'networkidle0' });
-                const pdfPath = mdPath.replace(/\.md$/i, '.pdf');
-                await page.pdf({ path: pdfPath, format: 'A4', printBackground: true, landscape: false, margin: { top: '20mm', bottom: '20mm', left: '15mm', right: '15mm' } });
-                await page.close();
-                console.log('Wrote PDF:', pdfPath);
-
-                // Compare with HEAD version and stage if different
-                let needsAdd = false;
-                try {
-                  const tmpOld = `/tmp/old_${path.basename(pdfPath)}`;
-                  try { execSync(`git show HEAD:"${pdfPath}" > "${tmpOld}" 2>/dev/null || true`); } catch (e) {}
-                  if (!fs.existsSync(tmpOld)) {
-                    needsAdd = true;
-                  } else {
-                    const oldBuf = fs.readFileSync(tmpOld);
-                    const newBuf = fs.readFileSync(pdfPath);
-                    if (!oldBuf.equals(newBuf)) needsAdd = true;
-                    fs.unlinkSync(tmpOld);
-                  }
-                } catch (e) {
-                  needsAdd = true;
-                }
-
-                if (needsAdd) {
-                  execSync(`git add "${pdfPath}"`);
-                  anyStaged = true;
-                  console.log('Staged', pdfPath);
-                } else {
-                  console.log('No change for', pdfPath);
-                }
-
-              } catch (err) {
-                console.error('Error processing', mdPath, err && err.stack ? err.stack : err);
+              }
+              /* Ensure code blocks have proper styling */
+              .markdown-body pre {
+                background-color: #f6f8fa;
+                border-radius: 6px;
+                padding: 16px;
+              }
+              .markdown-body code {
+                background-color: rgba(175, 184, 193, 0.2);
+                padding: 0.2em 0.4em;
+                border-radius: 6px;
+              }
+            </style>
+          </head>
+          <body class="markdown-body">
+          HTMLEOF
+            
+            # Convert markdown to HTML and append
+            npx marked "$file" >> "/tmp/temp_wrapper.html"
+            
+            echo "</body></html>" >> "/tmp/temp_wrapper.html"
+            
+            # Convert HTML to PDF using puppeteer (via md-to-pdf alternative)
+            npx md-to-pdf "$file" --config-file pdf-config.json --output "$dir/$filename.pdf" || {
+              echo "Falling back to alternative conversion method"
+              npx markdown-pdf "$file" -o "$dir/$filename.pdf" 2>/dev/null || {
+                # Final fallback using pandoc if available
+                echo "Using direct conversion"
+                cat > "/tmp/convert_$filename.md" << 'MDEOF'
+          <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; line-height: 1.6; color: #24292e; padding: 20px; }
+          pre { background-color: #f6f8fa; padding: 16px; border-radius: 6px; overflow: auto; }
+          code { background-color: rgba(175, 184, 193, 0.2); padding: 0.2em 0.4em; border-radius: 6px; font-family: 'Consolas', 'Monaco', monospace; }
+          </style>
+          MDEOF
+                cat "$file" >> "/tmp/convert_$filename.md"
+                md-to-pdf "/tmp/convert_$filename.md" --output "$dir/$filename.pdf"
               }
             }
+            
+            if [ -f "$dir/$filename.pdf" ]; then
+              echo "✓ Created: $dir/$filename.pdf"
+            else
+              echo "✗ Failed to create: $dir/$filename.pdf"
+            fi
+          done
 
-            await browser.close();
-
-            if (anyStaged) {
-              try {
-                execSync('git commit -m "chore: update PDFs generated from changed markdown files" || true', { stdio: 'inherit' });
-                execSync('git push origin HEAD:main', { stdio: 'inherit' });
-                console.log('Committed and pushed updated PDFs');
-              } catch (err) {
-                console.error('Commit/push failed', err && err.message ? err.message : err);
-                process.exit(1);
-              }
-            } else {
-              console.log('No PDF changes to commit');
-            }
-          })().catch(err => {
-            console.error(err);
-            process.exit(1);
-          });
-          NODE
-
-          node convert-md-to-pdf.js
-
-      - name: No changed markdown files
-        if: ${{ steps.changed.outputs.files == '' }}
-        run: echo "No changed markdown files to process (or only README.md changed)"
+      - name: Commit PDF files
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          # Add all PDF files
+          git add **/*.pdf
+          
+          # Check if there are changes to commit
+          if git diff --staged --quiet; then
+            echo "No PDF changes to commit"
+          else
+            git commit -m "Auto-generate PDFs from Markdown files [skip ci]"
+            git push
+          fi
