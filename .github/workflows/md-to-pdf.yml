@@ -1,4 +1,4 @@
-name: Obsidian-style Markdown -> PDF (Electron, sandbox fixed)
+name: Obsidian-style Markdown -> PDF (Electron, /dev/shm + GPU fixes)
 
 on:
   push:
@@ -33,16 +33,12 @@ jobs:
           set -euo pipefail
           BEFORE="${{ github.event.before }}"
           AFTER="${{ github.sha }}"
-
           if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
             git ls-files '*.md' > all_md.txt || true
           else
             git diff --name-only "$BEFORE" "$AFTER" -- '*.md' > all_md.txt || true
           fi
-
-          # Exclude README.md (case-insensitive) anywhere in the repo
           grep -v -Ei '(^|/)(readme)\.md$' all_md.txt > changed_md_filtered.txt || true
-
           echo "files<<EOF" >> "$GITHUB_OUTPUT"
           if [ -s changed_md_filtered.txt ]; then
             cat changed_md_filtered.txt >> "$GITHUB_OUTPUT"
@@ -78,10 +74,9 @@ jobs:
         run: |
           set -euo pipefail
           npm init -y
-          # install electron and renderer libs
           npm install --no-audit --no-fund electron@latest markdown-it markdown-it-footnote markdown-it-deflist markdown-it-abbr markdown-it-attrs highlight.js
 
-      - name: Convert changed markdown to PDF using Electron (fixed chrome-sandbox)
+      - name: Convert changed markdown to PDF using Electron (fix /dev/shm + GPU)
         if: ${{ steps.changed.outputs.files != '' }}
         env:
           FILES: ${{ steps.changed.outputs.files }}
@@ -90,25 +85,32 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Ensure /dev/shm is writable by all (fixes "Unable to access /dev/shm" errors)
+          if [ -d /dev/shm ]; then
+            sudo chmod 1777 /dev/shm || true
+          fi
+
+          # Create the Electron script
           cat > electron-print.js <<'NODE'
           const fs = require('fs');
           const path = require('path');
           const { execSync } = require('child_process');
           const { app, BrowserWindow } = require('electron');
           const MarkdownIt = require('markdown-it');
-          const md = MarkdownIt({
-            html: true,
-            linkify: true,
-            typographer: true
-          }).use(require('markdown-it-footnote'))
+          const md = MarkdownIt({ html: true, linkify: true, typographer: true })
+            .use(require('markdown-it-footnote'))
             .use(require('markdown-it-deflist'))
             .use(require('markdown-it-abbr'))
             .use(require('markdown-it-attrs'));
           const hljs = require('highlight.js');
 
-          // Disable sandbox in CI (common practice on GitHub runners)
+          // CI-friendly Chromium switches to avoid /dev/shm and GPU issues
           app.commandLine.appendSwitch('no-sandbox');
           app.commandLine.appendSwitch('disable-setuid-sandbox');
+          app.commandLine.appendSwitch('disable-dev-shm-usage');
+          app.commandLine.appendSwitch('disable-gpu');
+          app.commandLine.appendSwitch('disable-software-rasterizer');
+          app.commandLine.appendSwitch('single-process');
 
           md.set({
             highlight: function (str, lang) {
@@ -196,9 +198,7 @@ jobs:
                 let needsAdd = false;
                 try {
                   const tmpOld = path.join('/tmp', 'old_' + path.basename(pdfPath));
-                  try {
-                    execSync(`git show HEAD:"${pdfPath}" > "${tmpOld}" 2>/dev/null || true`);
-                  } catch (e) {}
+                  try { execSync(`git show HEAD:"${pdfPath}" > "${tmpOld}" 2>/dev/null || true`); } catch (e) {}
                   if (!fs.existsSync(tmpOld)) {
                     needsAdd = true;
                   } else {
@@ -245,17 +245,15 @@ jobs:
           });
           NODE
 
-          # Ensure electron binary is available
+          # Install electron and run
           npm install --no-audit --no-fund electron@latest
-
-          # Fix chrome-sandbox ownership and mode so Electron can run sandboxed if desired.
-          # This addresses the "SUID sandbox helper binary" fatal error on some runners.
+          # Try to fix chrome-sandbox ownership (optional)
           if [ -f node_modules/electron/dist/chrome-sandbox ]; then
             sudo chown root:root node_modules/electron/dist/chrome-sandbox || true
             sudo chmod 4755 node_modules/electron/dist/chrome-sandbox || true
           fi
 
-          # Run Electron under Xvfb. We still append no-sandbox switches in the script for CI reliability.
+          # Run Electron under Xvfb
           xvfb-run --auto-servernum --server-args='-screen 0 1280x1024x24' npx electron electron-print.js
 
       - name: No changed markdown files
