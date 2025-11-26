@@ -76,12 +76,6 @@ jobs:
           done
           
           cat >> index.md << EOF
-
-
-          ## 📖 About
-
-          This repository serves as a knowledge base for technical interview preparation, with a focus on DevOps and software engineering roles.
-
           ---
 
           *Last updated: $(date '+%B %d, %Y')*
