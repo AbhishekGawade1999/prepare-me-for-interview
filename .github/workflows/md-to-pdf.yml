@@ -1,4 +1,4 @@
-name: Obsidian-style Markdown -> PDF (Electron)
+name: Obsidian-style Markdown -> PDF (Electron, sandbox fixed)
 
 on:
   push:
@@ -43,7 +43,6 @@ jobs:
           # Exclude README.md (case-insensitive) anywhere in the repo
           grep -v -Ei '(^|/)(readme)\.md$' all_md.txt > changed_md_filtered.txt || true
 
-          # Export newline-separated list to GITHUB_OUTPUT
           echo "files<<EOF" >> "$GITHUB_OUTPUT"
           if [ -s changed_md_filtered.txt ]; then
             cat changed_md_filtered.txt >> "$GITHUB_OUTPUT"
@@ -82,7 +81,7 @@ jobs:
           # install electron and renderer libs
           npm install --no-audit --no-fund electron@latest markdown-it markdown-it-footnote markdown-it-deflist markdown-it-abbr markdown-it-attrs highlight.js
 
-      - name: Convert changed markdown to PDF using Electron
+      - name: Convert changed markdown to PDF using Electron (fixed chrome-sandbox)
         if: ${{ steps.changed.outputs.files != '' }}
         env:
           FILES: ${{ steps.changed.outputs.files }}
@@ -111,7 +110,6 @@ jobs:
           app.commandLine.appendSwitch('no-sandbox');
           app.commandLine.appendSwitch('disable-setuid-sandbox');
 
-          // Syntax highlighting for code blocks
           md.set({
             highlight: function (str, lang) {
               try {
@@ -128,14 +126,12 @@ jobs:
           const filesEnv = process.env.FILES || '';
           const files = filesEnv.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
 
-          // Load optional Obsidian CSS if present
           let themeCss = '';
           const themePath = path.join(process.cwd(), '.obsidian', 'export.css');
           if (fs.existsSync(themePath)) {
             themeCss = fs.readFileSync(themePath, 'utf8');
             console.log('Using .obsidian/export.css for styling');
           } else {
-            // Minimal fallback CSS + highlight.js default style (basic)
             themeCss = `
             body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial; padding: 28px; color: #222; background: #fff; }
             .markdown-body { max-width: 980px; margin: 0 auto; }
@@ -197,7 +193,6 @@ jobs:
                 fs.writeFileSync(pdfPath, pdfData);
                 console.log('Wrote PDF:', pdfPath);
 
-                // Compare with HEAD version and stage if different
                 let needsAdd = false;
                 try {
                   const tmpOld = path.join('/tmp', 'old_' + path.basename(pdfPath));
@@ -250,8 +245,17 @@ jobs:
           });
           NODE
 
-          # Ensure electron binary is available and run under Xvfb
+          # Ensure electron binary is available
           npm install --no-audit --no-fund electron@latest
+
+          # Fix chrome-sandbox ownership and mode so Electron can run sandboxed if desired.
+          # This addresses the "SUID sandbox helper binary" fatal error on some runners.
+          if [ -f node_modules/electron/dist/chrome-sandbox ]; then
+            sudo chown root:root node_modules/electron/dist/chrome-sandbox || true
+            sudo chmod 4755 node_modules/electron/dist/chrome-sandbox || true
+          fi
+
+          # Run Electron under Xvfb. We still append no-sandbox switches in the script for CI reliability.
           xvfb-run --auto-servernum --server-args='-screen 0 1280x1024x24' npx electron electron-print.js
 
       - name: No changed markdown files
