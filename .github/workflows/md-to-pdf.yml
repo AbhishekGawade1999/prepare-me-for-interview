@@ -1,4 +1,4 @@
-name: Obsidian-style Markdown -> PDF
+name: Obsidian-style Markdown -> PDF (Electron)
 
 on:
   push:
@@ -17,12 +17,12 @@ jobs:
       REPO: ${{ github.repository }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Configure git
+      - name: Configure git user
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -40,9 +40,10 @@ jobs:
             git diff --name-only "$BEFORE" "$AFTER" -- '*.md' > all_md.txt || true
           fi
 
-          # Exclude README.md (case-insensitive)
+          # Exclude README.md (case-insensitive) anywhere in the repo
           grep -v -Ei '(^|/)(readme)\.md$' all_md.txt > changed_md_filtered.txt || true
 
+          # Export newline-separated list to GITHUB_OUTPUT
           echo "files<<EOF" >> "$GITHUB_OUTPUT"
           if [ -s changed_md_filtered.txt ]; then
             cat changed_md_filtered.txt >> "$GITHUB_OUTPUT"
@@ -67,7 +68,6 @@ jobs:
             fonts-liberation \
             ca-certificates
 
-
       - name: Setup Node.js
         if: ${{ steps.changed.outputs.files != '' }}
         uses: actions/setup-node@v4
@@ -79,23 +79,25 @@ jobs:
         run: |
           set -euo pipefail
           npm init -y
-          npm install electron@latest markdown-it markdown-it-footnote markdown-it-deflist markdown-it-abbr markdown-it-attrs highlight.js
+          # install electron and renderer libs
+          npm install --no-audit --no-fund electron@latest markdown-it markdown-it-footnote markdown-it-deflist markdown-it-abbr markdown-it-attrs highlight.js
 
       - name: Convert changed markdown to PDF using Electron
         if: ${{ steps.changed.outputs.files != '' }}
         env:
           FILES: ${{ steps.changed.outputs.files }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          # create the electron script
+
           cat > electron-print.js <<'NODE'
           const fs = require('fs');
           const path = require('path');
           const { execSync } = require('child_process');
           const { app, BrowserWindow } = require('electron');
-          const md = require('markdown-it')({
+          const MarkdownIt = require('markdown-it');
+          const md = MarkdownIt({
             html: true,
             linkify: true,
             typographer: true
@@ -105,7 +107,11 @@ jobs:
             .use(require('markdown-it-attrs'));
           const hljs = require('highlight.js');
 
-          // highlight code blocks
+          // Disable sandbox in CI (common practice on GitHub runners)
+          app.commandLine.appendSwitch('no-sandbox');
+          app.commandLine.appendSwitch('disable-setuid-sandbox');
+
+          // Syntax highlighting for code blocks
           md.set({
             highlight: function (str, lang) {
               try {
@@ -120,31 +126,25 @@ jobs:
           });
 
           const filesEnv = process.env.FILES || '';
-          const repo = process.env.REPO || '';
-          const token = process.env.GITHUB_TOKEN || '';
-
           const files = filesEnv.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
 
-          // load optional Obsidian CSS if present
+          // Load optional Obsidian CSS if present
           let themeCss = '';
           const themePath = path.join(process.cwd(), '.obsidian', 'export.css');
           if (fs.existsSync(themePath)) {
             themeCss = fs.readFileSync(themePath, 'utf8');
             console.log('Using .obsidian/export.css for styling');
           } else {
-            // fallback minimal CSS + highlight.js default style
+            // Minimal fallback CSS + highlight.js default style (basic)
             themeCss = `
-            /* Minimal page styling */
             body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial; padding: 28px; color: #222; background: #fff; }
             .markdown-body { max-width: 980px; margin: 0 auto; }
             pre { background: #f6f8fa; padding: 12px; border-radius: 6px; overflow: auto; }
             code { font-family: "SFMono-Regular", Menlo, Monaco, "Roboto Mono", "Courier New", monospace; }
-            /* include highlight.js default */
-            ${require('highlight.js').getStyleSheet ? require('highlight.js').getStyleSheet() : ''}
+            .hljs { background: transparent; }
             `;
           }
 
-          // create a data URL wrapper for HTML
           function buildHtml(title, content) {
             return `<!doctype html>
             <html>
@@ -152,9 +152,7 @@ jobs:
                 <meta charset="utf-8">
                 <meta name="viewport" content="width=device-width,initial-scale=1">
                 <title>${title}</title>
-                <style>
-                  ${themeCss}
-                </style>
+                <style>${themeCss}</style>
               </head>
               <body>
                 <article class="markdown-body">
@@ -164,9 +162,7 @@ jobs:
             </html>`;
           }
 
-          // Electron app lifecycle
           app.whenReady().then(async () => {
-            // create a hidden BrowserWindow for printing
             const win = new BrowserWindow({
               width: 1200,
               height: 1600,
@@ -187,12 +183,9 @@ jobs:
                 const htmlBody = md.render(markdown);
                 const html = buildHtml(path.basename(mdPath), htmlBody);
 
-                // load content
                 await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
-                // wait for networkidle-like (small delay)
                 await new Promise(r => setTimeout(r, 250));
 
-                // print to PDF with A4 portrait
                 const pdfPath = mdPath.replace(/\.md$/i, '.pdf');
                 const pdfData = await win.webContents.printToPDF({
                   printBackground: true,
@@ -204,7 +197,7 @@ jobs:
                 fs.writeFileSync(pdfPath, pdfData);
                 console.log('Wrote PDF:', pdfPath);
 
-                // compare with HEAD version
+                // Compare with HEAD version and stage if different
                 let needsAdd = false;
                 try {
                   const tmpOld = path.join('/tmp', 'old_' + path.basename(pdfPath));
@@ -233,7 +226,6 @@ jobs:
 
               } catch (err) {
                 console.error('Error processing', mdPath, err && err.stack ? err.stack : err);
-                // continue to next file
               }
             }
 
@@ -258,11 +250,8 @@ jobs:
           });
           NODE
 
-          # run the electron script under xvfb (Electron needs an X server on ubuntu runners)
-          # install electron (if not already installed)
-          npm install electron@latest --no-audit --no-fund
-          
-          # run the script with the electron binary under Xvfb
+          # Ensure electron binary is available and run under Xvfb
+          npm install --no-audit --no-fund electron@latest
           xvfb-run --auto-servernum --server-args='-screen 0 1280x1024x24' npx electron electron-print.js
 
       - name: No changed markdown files
