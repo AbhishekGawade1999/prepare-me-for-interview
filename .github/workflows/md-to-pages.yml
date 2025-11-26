@@ -1,0 +1,113 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '**/*.md'
+      - '_config.yml'
+      - 'index.md'
+      - '.github/workflows/deploy-pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Auto-generate index.md with all pages
+        run: |
+          cat > index.md << 'EOF'
+          ---
+          layout: default
+          title: Home
+          ---
+
+          # 🎯 Interview Preparation Hub
+
+          Welcome to my technical interview preparation notes! This site contains topics like DevOps fundamentals, Docker, Kubernetes, and Python into focused Markdown guides. Each guide covers core concepts, common interview questions, and practical, hands-on tasks
+
+          ## 📚 Available Topics
+
+          EOF
+          
+          # Find all .md files and organize by directory
+          current_dir=""
+          find . -type f -name "*.md" \
+            ! -name "README*.md" \
+            ! -name "readme*.md" \
+            ! -name "index.md" \
+            ! -path "*/.git/*" \
+            ! -path "*/node_modules/*" \
+            ! -path "*/_site/*" \
+            | sort | while read -r file; do
+            
+            # Remove leading ./
+            file=${file#./}
+            
+            # Get the directory and filename
+            dir=$(dirname "$file")
+            filename=$(basename "$file" .md)
+            
+            # Create a nice title from filename
+            title=$(echo "$filename" | sed 's/-/ /g' | sed 's/_/ /g')
+            
+            # Add section header if directory changes
+            if [ "$dir" != "." ] && [ "$dir" != "$current_dir" ]; then
+              echo "" >> index.md
+              echo "### $dir" >> index.md
+              current_dir="$dir"
+            fi
+            
+            # Add the link
+            echo "- [$title]($file)" >> index.md
+          done
+          
+          cat >> index.md << EOF
+
+
+          ## 📖 About
+
+          This repository serves as a knowledge base for technical interview preparation, with a focus on DevOps and software engineering roles.
+
+          ---
+
+          *Last updated: $(date '+%B %d, %Y')*
+          EOF
+          
+          echo "✓ index.md generated with all available pages"
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Build with Jekyll
+        uses: actions/jekyll-build-pages@v1
+        with:
+          source: ./
+          destination: ./_site
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
