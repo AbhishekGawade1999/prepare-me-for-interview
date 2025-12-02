@@ -74,6 +74,7 @@ resource "aws_iam_user" "admin-user" {
 ---
 # HCL
 - ## Syntax
+
 ```HCL
 <block> <parameters> {
 	key1 = value1
