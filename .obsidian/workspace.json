@@ -20,8 +20,23 @@
               "icon": "lucide-file",
               "title": "Terraform"
             }
+          },
+          {
+            "id": "5f463be7b11ef8f3",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "DevOps/Terraform.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "Terraform"
+            }
           }
-        ]
+        ],
+        "currentTab": 1
       }
     ],
     "direction": "vertical"
@@ -183,13 +198,17 @@
       "bases:Create new base": false
     }
   },
-  "active": "b712f6df0f4e7887",
+  "active": "5f463be7b11ef8f3",
   "lastOpenFiles": [
+    "DevOps/attachments/Screenshot 2025-12-02 at 11.14.26 AM.png",
+    "DevOps/Python.md",
+    "DevOps/Terraform.md",
+    "DevOps/attachments/Screenshot 2025-12-02 at 9.35.51 AM.png",
+    "DevOps/attachments/Screenshot 2025-12-02 at 9.10.59 AM.png",
+    "DevOps/attachments/Screenshot 2025-12-02 at 8.45.30 AM.png",
     "DevOps/attachments/Screenshot 2025-12-01 at 10.34.51 AM.png",
     "DevOps/attachments/Screenshot 2025-12-01 at 10.32.43 AM.png",
     "DevOps/attachments/Screenshot 2025-12-01 at 10.16.39 AM.png",
-    "DevOps/Python.md",
-    "DevOps/Terraform.md",
     "_config.yml",
     "DevOps/Python.pdf",
     "Python copy.md",
@@ -200,10 +219,6 @@
     "DevOps/attachments/Pasted image 20251125203417.png",
     "DevOps/attachments/Pasted image 20251125203405.png",
     "DevOps/attachments/Pasted image 20251125203359.png",
-    "DevOps/attachments/Pasted image 20251125203352.png",
-    "DevOps/attachments/Pasted image 20251125203344.png",
-    "DevOps/attachments/Pasted image 20251125203335.png",
-    "DevOps/attachments/Pasted image 20251125203323.png",
     "DevOps/attachments",
     "images",
     "DevOps"

@@ -351,16 +351,19 @@
 ---
 ### List vs Tuples vs Set
 - **Definition**: Three different collection types with different properties.
-- **Quick Reference** (Ordered means insertion order, not sorting):
+- **Quick Reference** (Ordered means insertion order, not sorting)
+- Basically, tuples are lists which can't be modified
+- And set is basically a list which don't allow duplication (But it's mutable)
 
-| Feature            | List                  | Tuple                 | Set                        |
-|--------------------|-----------------------|-----------------------|----------------------------|
-| Syntax             | `[1, 2, 3]`           | `(1, 2, 3)`           | `{1, 2, 3}`                |
-| Ordered            | ✅ Yes                | ✅ Yes                | ❌ No (unordered)          |
-| Mutable            | ✅ Yes (can change)   | ❌ No (immutable)     | ✅ Yes (can add/remove)    |
-| Allows duplicates  | ✅ Yes                | ✅ Yes                | ❌ No (unique elements)    |
-| Indexing           | ✅ Supported          | ✅ Supported          | ❌ Not supported           |
-| Use case           | General collection    | Fixed collection      | Unique items, set ops      |
+| Feature         | List                          | Set                               | Tuple                             |
+|-----------------|-------------------------------|-----------------------------------|-----------------------------------|
+| Syntax          | `[ ]`                         | `{ }`                             | `( )`                             |
+| Mutability      | Mutable                       | Mutable                           | Immutable                         |
+| Order           | Ordered                       | Unordered                         | Ordered                           |
+| Duplicates      | Allowed                       | Not allowed                       | Allowed                           |
+| Indexing        | Supported                     | Not supported                     | Supported                         |
+| Example         | `[1, 2, 3]`                   | `{1, 2, 3}`                       | `(1, 2, 3)`                       |
+| Use Case        | Shopping cart, to-do list     | Unique items, remove duplicates   | Coordinates, fixed records        |
 
 - **DevOps Example Usage**:
 	```python
