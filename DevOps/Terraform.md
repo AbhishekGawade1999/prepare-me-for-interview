@@ -10,6 +10,15 @@
 
 ⭐️ The most important thing to do in solving a problem is to begin.
 – Frank Tyger
+
+⭐️ Real difficulties can be overcome; it is only the imaginary ones that are unconquerable.
+– Theodore N. Vail
+
+⭐️ One big reason for a winning attitude is that you will take the necessary steps and not quit when the going gets difficult.
+– Don M.Green
+
+⭐️ You never know what you can do until you try.
+– William Cobbett
 ```
 # Objectives
 - Introduction to IaC
@@ -73,8 +82,7 @@ resource "aws_iam_user" "admin-user" {
 - HCL - Hashicorp Configuration Language
 ---
 # HCL
-- ## Syntax
-
+- Syntax
 ```HCL
 <block> <parameters> {
 	key1 = value1
@@ -95,7 +103,7 @@ Here,
 - Think this like a function
 ```
 def sum {
-sum = a + b
+	sum = a + b
 }
 ```
 - `resource` is like def but there can be multiple other types than just def, so like data, variable, output etc
@@ -208,6 +216,80 @@ variable kitty {
 	default = ["cat", 10, true]
 }
 ```
+
+---
+# Interactive Mode
+- If we don't provide any default value, then when done terraform apply, it prompts to enter a variable
+- Or we can apply command line like - `terraform apply -var "filename=/root/abc.txt" -var "content=content of file"`
+- We can also export variables
+	- `export TF_VAR_filename="/root/abc.txt"`
+- We can also use `terraform.tfvars` file to load variables like
+```
+filename = "/root/abc.txt"
+context = "I'm batman!!!"
+```
+- If variable filename is `*.auto.tfvars or terraform.tfvars` they will be loaded directly but if it's anything different like `abc.tfvars` you have to load it using flag `-var-file abc.tfvars`
+- If variables are provided in multiple ways, terraform considers --> Command line > *.auto.tfvars > *.tfvars > export
+	- So basically whatever is at command will be given highest priority while exported variable value as lowest priority
+
+## Conclusion
+- We can declare variables using `*.tf` file, even in main.tf or anywhere
+- ```
+  variable "filename" {
+	  type = string
+	  default = "/root/abc.txt"
+  }
+  ```
+
+- Then we can assign value by either exporting, or creating files like `*.tfvars` or passing on command line
+---
+# Attribution
+### Referring output of one block to another
+```
+resource "random_pet" "my-pet" {
+	prefix = "MR"
+	seperator = "."
+	length = "10"
+}
+
+resource "local_file" "my-pet-id" {
+	filename = "/root/abc.txt"
+	content = "My fav pet is -  ${random_pet.my-pet.id}"
+}
+```
+
+- In order to check, which attribution (Outputs) are created for any resource type, we have to check official documentation attribution section
+---
+# Explicit dependency
+- Let's say we want to create resource a before resource b then we can use depends_on
+```
+resource "local_file" "file-a" {
+	filename = "/root/file-a.txt"
+	content = "This is created after file b"
+	depends_on = [
+		local_file.file-b
+	]
+}
+
+resource "local_file" "file-b" {
+	filename = "/root/file-b.txt"
+	content = "This is created later"
+}
+```
+
+---
+## Output Variables
+- We can define output block in same .tf file and output variable
+```
+output "pet-name" {
+	value = random_pet.my_pet.id
+}
+```
+
+- `terraform output` or `terraform output pet-name` to see the output
+---
+# Terraform state
+- As a consequence of terraform apply, `terraform.tfstate` file is created
 ---
 # Common Questions
 - How can I make Terraform apply run without asking for confirmation?
