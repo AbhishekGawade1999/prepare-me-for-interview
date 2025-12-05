@@ -198,11 +198,13 @@
       "bases:Create new base": false
     }
   },
-  "active": "5f463be7b11ef8f3",
+  "active": "6957ca142900f32d",
   "lastOpenFiles": [
+    "DevOps/SRE.md",
+    "DevOps/AWS.md",
+    "DevOps/Terraform.md",
     "DevOps/attachments/Screenshot 2025-12-02 at 11.14.26 AM.png",
     "DevOps/Python.md",
-    "DevOps/Terraform.md",
     "DevOps/attachments/Screenshot 2025-12-02 at 9.35.51 AM.png",
     "DevOps/attachments/Screenshot 2025-12-02 at 9.10.59 AM.png",
     "DevOps/attachments/Screenshot 2025-12-02 at 8.45.30 AM.png",
@@ -218,7 +220,6 @@
     "Pasted image 20251125201100.png",
     "DevOps/attachments/Pasted image 20251125203417.png",
     "DevOps/attachments/Pasted image 20251125203405.png",
-    "DevOps/attachments/Pasted image 20251125203359.png",
     "DevOps/attachments",
     "images",
     "DevOps"
